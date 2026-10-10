@@ -4,6 +4,8 @@ mod exclusions;
 mod logging;
 mod pause;
 #[allow(dead_code)] // Used by capture, which arrives in #6.
+mod redact;
+#[allow(dead_code)] // Used by capture, which arrives in #6.
 mod site;
 mod tray;
 
