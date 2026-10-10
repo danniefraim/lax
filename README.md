@@ -1,5 +1,9 @@
 # Lax 🐟
 
+[![CI](https://github.com/fnyman-ctrl/lax/actions/workflows/ci.yml/badge.svg)](https://github.com/fnyman-ctrl/lax/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/fnyman-ctrl/lax/badge)](https://scorecard.dev/viewer/?uri=github.com/fnyman-ctrl/lax)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+
 **A private, fully local memory for your Mac that learns who you are and what you work on.**
 
 Lax quietly follows what you do on your computer and turns it into a living memory:
@@ -35,22 +39,34 @@ time tracking, and a local MCP server so other local tools can use your memory.
 
 ## Principles
 
-- **Local only.** All models run on-device (via [Ollama](https://ollama.com) or similar).
-  Any future integration that sends data off the machine must be explicit opt-in.
+- **Local by default.** Out of the box, all models run on your machine (via
+  [Ollama](https://ollama.com) or similar) and nothing is sent anywhere.
+- **Your choice of model.** Lax works with any OpenAI-compatible API. If your
+  computer can't run a local model, you can pick a privacy-focused provider
+  instead. That's opt-in, data is redacted first, and every request is logged
+  for you to inspect.
 - **Your data, open formats.** Memory is stored as Markdown + SQLite in a folder you own.
-- **Transparent.** You can always see what was captured and what Lax believes about you,
-  and pause, exclude apps, or delete anything.
-- **Runs on ordinary hardware.** Target: Apple Silicon with 16 GB RAM.
+- **Transparent.** You can always see what was captured, what Lax believes about you,
+  and what was sent off your machine. You can pause, exclude apps or delete anything.
+- **No telemetry.** Ever.
+
+These principles are spelled out as concrete rules in [docs/GUARDRAILS.md](docs/GUARDRAILS.md).
 
 ## Tech stack
 
 - [Tauri](https://tauri.app) (Rust backend, React/TypeScript UI)
 - SQLite (FTS5 full-text search, `sqlite-vec` for semantic search)
-- Local LLM through Ollama (small 4–8B models by default, swappable)
+- Any OpenAI-compatible model API: local (Ollama, LM Studio…) by default, remote if you choose
 - Apple Vision OCR, ScreenCaptureKit, Accessibility API
 - Whisper for audio, building on the approach of [Handy](https://github.com/cjpais/Handy)
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details, and
+[docs/adr/](docs/adr/) for why things are built the way they are.
+
+## Contributing
+
+Ideas, questions and feedback are very welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+To report a security or privacy problem, see [SECURITY.md](SECURITY.md).
 
 ## Acknowledgements
 

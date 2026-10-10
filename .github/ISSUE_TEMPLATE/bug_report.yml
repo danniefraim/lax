@@ -1,0 +1,38 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Don't include real personal data.** No screenshots of your own activity,
+        captured text or database files. Use synthetic examples.
+
+        Found a security or privacy problem? Don't file it here. See SECURITY.md.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: And what did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Lax version
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac model
+      placeholder: macOS 26.1, MacBook Pro M1 Pro 16 GB
+  - type: input
+    id: model
+    attributes:
+      label: Model setup
+      placeholder: Ollama + qwen3:4b / remote provider (which?)

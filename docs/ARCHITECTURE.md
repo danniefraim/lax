@@ -47,15 +47,15 @@ previous one, so they can be built, tested and improved independently.
 
 | Task | Default | Notes |
 |---|---|---|
-| Summaries, extraction, page updates | 4–8B instruct model via Ollama | Must handle Swedish and English |
+| Summaries, extraction, page updates | Local 4–8B instruct model, or an opt-in remote provider | Must handle Swedish and English |
 | Embeddings | Small local embedding model | For entity resolution and search |
 | Audio (later) | Whisper (e.g. KB-Whisper for Swedish) | Following Handy's approach |
 
-The model backend is behind a trait so Ollama, LM Studio or MLX can be swapped in.
+All model calls go through one provider interface speaking the OpenAI-compatible
+API, so any local server (Ollama, LM Studio, llama.cpp, MLX) or opt-in remote
+provider can be used without code changes. See
+[ADR 0004](adr/0004-openai-compatible-model-providers.md).
 
-## Privacy guarantees
+## Privacy and security
 
-- No outgoing network calls except to `localhost` model servers and explicit,
-  user-initiated model downloads.
-- No telemetry, no crash reporting to third parties.
-- Pause button, per-app exclude list, and "forget this time range".
+See [GUARDRAILS.md](GUARDRAILS.md). Every stage above must follow it.
