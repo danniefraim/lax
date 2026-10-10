@@ -7,6 +7,8 @@ mod pause;
 mod redact;
 #[allow(dead_code)] // Used by capture, which arrives in #6.
 mod site;
+#[allow(dead_code)] // Used by capture, which arrives in #6.
+mod store;
 mod tray;
 
 use tauri::{Manager, WindowEvent};
