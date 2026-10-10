@@ -6,12 +6,13 @@ mod capture;
 mod exclusions;
 mod expiry;
 mod filevault;
+mod forget;
 #[allow(dead_code)] // Some levels and fields have no user yet.
 mod logging;
 mod pause;
 mod redact;
 mod site;
-#[allow(dead_code)] // Forgetting is used from the window in #9.
+#[allow(dead_code)] // Plain search and setting the capture interval await the settings window.
 mod store;
 mod tray;
 mod viewer;
@@ -33,6 +34,11 @@ pub fn run() {
             viewer::recent_captures,
             viewer::search_captures,
             viewer::capture_detail,
+            forget::captured_apps,
+            forget::forget_captures,
+            forget::delete_all_data,
+            forget::retention_days,
+            forget::set_retention_days,
         ])
         .setup(|app| {
             // Lax lives in the menu bar, without a Dock icon.

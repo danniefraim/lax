@@ -646,6 +646,10 @@ mod run {
         });
     }
 
+    /// Whether the store took care of `snapshot`: stored it, or refused it
+    /// because the user forgot that time or app meanwhile. Either way it is
+    /// remembered as handled, so content the user just forgot isn't stored
+    /// again while it stays unchanged on screen.
     fn store(app: &AppHandle, snapshot: &Snapshot) -> bool {
         let Some(store) = app.try_state::<Mutex<Store>>() else {
             return false;
