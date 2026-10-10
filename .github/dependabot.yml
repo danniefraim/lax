@@ -1,0 +1,14 @@
+# Cargo and npm ecosystems are added together with the app scaffold.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Wait a week before adopting new releases, so compromised versions are
+    # more likely to be caught and yanked before they reach us.
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
