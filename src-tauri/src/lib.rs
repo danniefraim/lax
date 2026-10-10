@@ -14,6 +14,7 @@ mod model_settings;
 #[allow(dead_code)] // Embeddings and more are used by the journal (Stage 3).
 mod models;
 mod pause;
+#[allow(dead_code)] // RemoteRedactor is used by remote providers (#16).
 mod redact;
 mod site;
 #[allow(dead_code)] // Plain search and setting the capture interval await the settings window.
