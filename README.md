@@ -59,4 +59,12 @@ Lax builds on ideas and code from [Handy](https://github.com/cjpais/Handy) by CJ
 
 ## License
 
-[MIT](LICENSE)
+Lax is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
+
+You're free to use, study, change and share Lax. If you distribute a modified
+version, or run one as a network service, you must make your source code
+available under the same license. Lax is about keeping your data in your hands,
+and the license keeps the code that way too.
+
+Parts derived from [Handy](https://github.com/cjpais/Handy) remain under their
+original MIT license, with the copyright notice kept in those files.
