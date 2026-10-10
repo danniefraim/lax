@@ -531,6 +531,54 @@ fn title_without_address(title: &str) -> String {
     site_from_url(&address).unwrap_or_default()
 }
 
+/// When the capture loop last went round, so the window can tell whether
+/// capture is actually running.
+///
+/// Measured on the monotonic clock, which, like the loop's sleep, stands
+/// still while the Mac sleeps. On the wall clock, the loop would look dead
+/// for the whole sleep right after waking up.
+pub struct Heartbeat {
+    start: Instant,
+    /// Milliseconds after `start` of the last round, plus one; 0 = never.
+    last: std::sync::atomic::AtomicU64,
+}
+
+impl Default for Heartbeat {
+    fn default() -> Self {
+        Heartbeat {
+            start: Instant::now(),
+            last: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+}
+
+impl Heartbeat {
+    pub fn beat(&self) {
+        self.beat_at(self.start.elapsed());
+    }
+
+    /// Whether the loop went round within the last `max_gap`.
+    pub fn alive(&self, max_gap: Duration) -> bool {
+        self.alive_at(self.start.elapsed(), max_gap)
+    }
+
+    fn beat_at(&self, since_start: Duration) {
+        let millis = u64::try_from(since_start.as_millis()).unwrap_or(u64::MAX - 1);
+        self.last
+            .store(millis + 1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn alive_at(&self, since_start: Duration, max_gap: Duration) -> bool {
+        match self.last.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => false,
+            last => {
+                let last = Duration::from_millis(last - 1);
+                since_start.saturating_sub(last) <= max_gap
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub use run::start;
 
@@ -544,7 +592,7 @@ mod run {
     use chrono::Local;
     use tauri::{AppHandle, Manager};
 
-    use super::{Capturer, Limits, Outcome, Snapshot};
+    use super::{Capturer, Heartbeat, Limits, Outcome, Snapshot};
     use crate::accessibility;
     use crate::ax::AxScreen;
     use crate::exclusions::{Exclusions, SkipCounter};
@@ -568,6 +616,7 @@ mod run {
             let mut last_summary = Instant::now();
             loop {
                 let started = Instant::now();
+                app.state::<Heartbeat>().beat();
                 if accessibility::is_granted() {
                     let pause = app.state::<Pause>();
                     let mut outcome = capturer.tick(&mut screen, || pause.is_paused());
@@ -1606,6 +1655,17 @@ mod tests {
             clean_title("Notes - Notes", "Notes", false),
             "Notes - Notes"
         );
+    }
+
+    #[test]
+    fn heartbeat_tells_whether_the_loop_runs() {
+        let heartbeat = Heartbeat::default();
+        let gap = Duration::from_secs(30);
+        let at = Duration::from_secs;
+        assert!(!heartbeat.alive_at(at(0), gap), "never beat");
+        heartbeat.beat_at(at(100));
+        assert!(heartbeat.alive_at(at(130), gap));
+        assert!(!heartbeat.alive_at(at(131), gap));
     }
 
     #[test]

@@ -11,9 +11,10 @@ mod logging;
 mod pause;
 mod redact;
 mod site;
-#[allow(dead_code)] // Searching and forgetting are used by the viewer (#10).
+#[allow(dead_code)] // Forgetting is used from the window in #9.
 mod store;
 mod tray;
+mod viewer;
 
 use std::sync::Mutex;
 
@@ -23,10 +24,15 @@ use tauri::{Manager, WindowEvent};
 pub fn run() {
     tauri::Builder::default()
         .manage(pause::Pause::default())
+        .manage(capture::Heartbeat::default())
         .invoke_handler(tauri::generate_handler![
             accessibility::accessibility_status,
             accessibility::open_accessibility_settings,
             filevault::filevault_enabled,
+            viewer::capture_status,
+            viewer::recent_captures,
+            viewer::search_captures,
+            viewer::capture_detail,
         ])
         .setup(|app| {
             // Lax lives in the menu bar, without a Dock icon.
@@ -48,9 +54,8 @@ pub fn run() {
             // capturing by mistake.
             //
             // If the database can't be opened (damaged, from a newer Lax, disk
-            // full), Lax still starts so the user can see what's wrong, but
-            // nothing can be stored. Showing the error in the window comes with
-            // the viewer (#10).
+            // full), Lax still starts so the user can see what's wrong in the
+            // window, but nothing can be stored.
             let paused_until_resumed = pause::CaptureState::Paused { until: None };
             let pause = app.state::<pause::Pause>();
             match store::Store::open(&app.path().app_data_dir()?) {
@@ -63,7 +68,10 @@ pub fn run() {
                     #[cfg(target_os = "macos")]
                     capture::start(app.handle().clone());
                 }
-                Err(_) => pause.restore(paused_until_resumed),
+                Err(error) => {
+                    pause.restore(paused_until_resumed);
+                    app.manage(viewer::StoreUnavailable(error.to_string()));
+                }
             }
             tray::create(app.handle())?;
 

@@ -1690,6 +1690,8 @@ dependencies = [
  "objc2-foundation",
  "regex",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "url",
