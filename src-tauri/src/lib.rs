@@ -1,3 +1,4 @@
+mod accessibility;
 #[allow(dead_code)] // Used by capture, which arrives in #6.
 mod exclusions;
 mod expiry;
@@ -20,6 +21,10 @@ use tauri::{Manager, WindowEvent};
 pub fn run() {
     tauri::Builder::default()
         .manage(pause::Pause::default())
+        .invoke_handler(tauri::generate_handler![
+            accessibility::accessibility_status,
+            accessibility::open_accessibility_settings,
+        ])
         .setup(|app| {
             // Lax lives in the menu bar, without a Dock icon.
             #[cfg(target_os = "macos")]
@@ -54,6 +59,18 @@ pub fn run() {
                 Err(_) => pause.restore(paused_until_resumed),
             }
             tray::create(app.handle())?;
+
+            // Without the Accessibility permission Lax can't capture anything,
+            // so show the onboarding window explaining why it's needed.
+            let granted = accessibility::is_granted();
+            if !granted {
+                tray::open_window(app.handle());
+            }
+            accessibility::watch(app.handle().clone(), granted, |app, granted| {
+                if !granted {
+                    tray::open_window(app);
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
