@@ -1,0 +1,62 @@
+# Lax 🐟
+
+**A private, fully local memory for your Mac that learns who you are and what you work on.**
+
+Lax quietly follows what you do on your computer and turns it into a living memory:
+which projects you're working on, who you work with, and what happened when.
+Everything runs on your machine. No cloud, no API keys, no telemetry. Nothing
+leaves your computer.
+
+> Salmon (*lax* in Swedish) find their way back to the exact river they were born
+> in, years later and thousands of kilometres away. That's the kind of memory we're after.
+
+> ⚠️ **Status: early development.** Nothing works yet. Follow along or help out!
+
+## Why
+
+Personal memory apps have shown how useful it is to have a computer that remembers
+what you did. But many of them send your screen content to cloud AI providers, even
+when the data itself is stored locally. Your screen is the most private thing you have. Lax uses local models
+only, so the privacy promise is simple: **your data never leaves your Mac.**
+
+## What it will do
+
+1. **Capture**: read the text of the active window (app, window title, content)
+   using macOS Accessibility APIs, with on-device OCR as fallback.
+2. **Summarize**: every few minutes a local LLM turns raw activity into short,
+   readable episodes ("Worked on the Q3 proposal in Google Docs, emailed Anna about delivery").
+3. **Recognize**: extract projects, people and organisations from those episodes.
+4. **Learn**: maintain a page per project and person, plus an *About me* page,
+   kept as plain **Markdown files** you can read, search and edit. When you
+   correct a page, Lax learns from the correction.
+
+Later: search and Q&A over your history, meeting transcription (Whisper),
+time tracking, and a local MCP server so other local tools can use your memory.
+
+## Principles
+
+- **Local only.** All models run on-device (via [Ollama](https://ollama.com) or similar).
+  Any future integration that sends data off the machine must be explicit opt-in.
+- **Your data, open formats.** Memory is stored as Markdown + SQLite in a folder you own.
+- **Transparent.** You can always see what was captured and what Lax believes about you,
+  and pause, exclude apps, or delete anything.
+- **Runs on ordinary hardware.** Target: Apple Silicon with 16 GB RAM.
+
+## Tech stack
+
+- [Tauri](https://tauri.app) (Rust backend, React/TypeScript UI)
+- SQLite (FTS5 full-text search, `sqlite-vec` for semantic search)
+- Local LLM through Ollama (small 4–8B models by default, swappable)
+- Apple Vision OCR, ScreenCaptureKit, Accessibility API
+- Whisper for audio, building on the approach of [Handy](https://github.com/cjpais/Handy)
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
+
+## Acknowledgements
+
+Lax builds on ideas and code from [Handy](https://github.com/cjpais/Handy) by CJ Pais
+(MIT), a great offline speech-to-text app.
+
+## License
+
+[MIT](LICENSE)
