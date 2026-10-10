@@ -2,6 +2,7 @@ mod accessibility;
 #[allow(dead_code)] // Used by capture, which arrives in #6.
 mod exclusions;
 mod expiry;
+mod filevault;
 #[allow(dead_code)] // Most levels and fields are first used by capture (#6).
 mod logging;
 mod pause;
@@ -24,6 +25,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             accessibility::accessibility_status,
             accessibility::open_accessibility_settings,
+            filevault::filevault_enabled,
         ])
         .setup(|app| {
             // Lax lives in the menu bar, without a Dock icon.
