@@ -25,7 +25,7 @@ use crate::logging::{self, ErrorKind, Field};
 use crate::models::structured::{self, Captured, StructuredError, Validate};
 use crate::models::{Endpoint, ModelClient, ModelTurn};
 use crate::pause::Pause;
-use crate::store::{Episode, ModelTask, Store};
+use crate::store::{EntityKind, Episode, ModelTask, Store};
 
 /// Most entries and characters of entries given to the model, so the prompt
 /// fits a small local model's context and is answered within the timeout.
@@ -33,6 +33,8 @@ const MAX_ENTRIES: usize = 60;
 const MAX_CHARS: usize = 14_000;
 /// Most entries taken from each way of finding them.
 const PER_SOURCE: usize = 40;
+/// Most named entities whose facts are given.
+const MAX_KNOWN_ENTITIES: usize = 5;
 /// Entries given when nothing in the question narrows it down.
 const RECENT: usize = 40;
 /// Room for a model that reasons before answering, as for the journal.
@@ -40,11 +42,13 @@ const MAX_TOKENS: u32 = 2000;
 const MAX_QUESTION_CHARS: usize = 1000;
 const MAX_ANSWER_CHARS: usize = 4000;
 
-const TASK: &str = "Answer the user's question using only the journal entries in the \
-captured blocks. Each entry starts with its number in brackets, then when it happened and in \
-which apps. Answer briefly and directly, in the language of the question. For several things, \
-use short lines starting with \"- \". Put the numbers of the entries the answer is based on in \
-sources. If the entries don't answer the question, say so plainly; don't guess.";
+const TASK: &str = "Answer the user's question using only the captured blocks: what the \
+memory knows about the user and about people, organisations and projects, and journal entries. \
+Each journal entry starts with its number in brackets, then when it happened and in which apps. \
+Answer briefly and directly, in the language of the question. For several things, use short \
+lines starting with \"- \". Put the numbers of the journal entries the answer is based on in \
+sources (what the memory knows has no number). If the blocks don't answer the question, say so \
+plainly; don't guess.";
 const SHAPE: &str = r#"{"answer": string, "sources": [number]}"#;
 
 /// What the model must answer.
@@ -81,6 +85,9 @@ impl Validate for Reply {
 #[derive(Debug)]
 struct Found {
     episodes: Vec<Episode>,
+    /// What the memory's pages say about the user and about the entities
+    /// the question names, a block each.
+    known: Vec<String>,
     /// Nothing in the question narrowed it down, so these are the latest.
     recent_only: bool,
     /// The question named a time.
@@ -130,8 +137,10 @@ fn gather<Tz: TimeZone>(
         }
     };
 
+    // What the memory knows comes first, and counts against the budget.
+    let known = known(store, &entities)?;
     let mut seen = HashSet::new();
-    let mut chars = 0;
+    let mut chars: usize = known.iter().map(|k| k.chars().count()).sum();
     let mut episodes = Vec::new();
     for episode in candidates {
         if episodes.len() >= MAX_ENTRIES {
@@ -149,10 +158,55 @@ fn gather<Tz: TimeZone>(
     }
     episodes.sort_by_key(|e| (e.started_at, e.id));
     Ok(Found {
+        known,
         episodes,
         recent_only,
         timed: range.is_some(),
     })
+}
+
+/// The facts on the pages of the named entities, and on `about-me.md`.
+fn known(store: &Store, entities: &[i64]) -> crate::store::Result<Vec<String>> {
+    let mut known = Vec::new();
+    if let Some(facts) = store.about_me_page()?.and_then(|p| p.facts)
+        && !facts.is_empty()
+    {
+        known.push(format!(
+            "What the memory knows about the user:\n{}",
+            bullets(&facts)
+        ));
+    }
+    let all = store.entities()?;
+    for id in entities.iter().take(MAX_KNOWN_ENTITIES) {
+        let (Some(entity), Some(facts)) = (
+            all.iter().find(|e| e.id == *id),
+            store.page_of(*id)?.and_then(|p| p.facts),
+        ) else {
+            continue;
+        };
+        if facts.is_empty() {
+            continue;
+        }
+        let kind = match entity.kind {
+            EntityKind::Person => "person",
+            EntityKind::Organisation => "organisation",
+            EntityKind::Project => "project",
+        };
+        known.push(format!(
+            "What the memory knows about {} ({kind}):\n{}",
+            entity.name,
+            bullets(&facts)
+        ));
+    }
+    Ok(known)
+}
+
+fn bullets(lines: &[String]) -> String {
+    lines
+        .iter()
+        .map(|l| format!("- {l}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The words of `text`, lowercased, split at anything that isn't a letter
@@ -555,7 +609,9 @@ pub async fn ask_memory(app: AppHandle, question: String) -> Result<AskAnswer, S
             .ok_or("Choose a chat model under Models first.")?;
         (choice, gather(&store, &question, &now).map_err(failed)?)
     };
-    if found.episodes.is_empty() {
+    // A time with nothing in it is answered as such: what the memory knows
+    // in general says nothing about that day.
+    if found.episodes.is_empty() && (found.timed || found.known.is_empty()) {
         return Ok(AskAnswer {
             answer: if found.timed {
                 "There's nothing in the journal from that time.".to_string()
@@ -575,10 +631,16 @@ pub async fn ask_memory(app: AppHandle, question: String) -> Result<AskAnswer, S
     };
     let started = std::time::Instant::now();
     let texts: Vec<String> = found
-        .episodes
+        .known
         .iter()
-        .enumerate()
-        .map(|(i, e)| entry_text(i + 1, e, &Local))
+        .cloned()
+        .chain(
+            found
+                .episodes
+                .iter()
+                .enumerate()
+                .map(|(i, e)| entry_text(i + 1, e, &Local)),
+        )
         .collect();
     // In turn with the journal and the memory; a pause meanwhile drops the
     // question (GUARDRAILS §4).
@@ -871,6 +933,72 @@ mod tests {
                 .iter()
                 .any(|e| e.summary == "Mailade Anna om Q3-offerten.")
         );
+    }
+
+    #[test]
+    fn what_the_memory_knows_comes_along() {
+        let mut store = sample();
+        let anna = store.entity_names().unwrap()[0].0;
+        store.keep_entity(anna).unwrap();
+        let folder = std::env::temp_dir().join(format!(
+            "lax-ask-test-{}",
+            crate::pages::block::new_id().unwrap()
+        ));
+        crate::pages::prepare_folder(&folder).unwrap();
+        store.set_memory_enabled(true).unwrap();
+        crate::pages::sync(
+            &mut store,
+            &folder,
+            &mut crate::pages::ScanCache::new(),
+            at(11, 12),
+            &stockholm(),
+        )
+        .unwrap();
+        let page = store.page_of(anna).unwrap().unwrap();
+        let sources: Vec<i64> = store
+            .episodes_mentioning(&[anna], None, 10)
+            .unwrap()
+            .iter()
+            .map(|e| e.id)
+            .collect();
+        store
+            .set_facts(
+                &page.id,
+                &["Leder Q3-lanseringen.".to_string()],
+                &sources,
+                at(11, 12),
+            )
+            .unwrap();
+        let about = store.about_me_page().unwrap().unwrap();
+        store
+            .set_facts(
+                &about.id,
+                &["Jobbar med lanseringar.".to_string()],
+                &sources,
+                at(11, 12),
+            )
+            .unwrap();
+
+        let found = gather(&store, "Vad gör Anna?", &now()).unwrap();
+        assert_eq!(
+            found.known,
+            [
+                "What the memory knows about the user:\n- Jobbar med lanseringar.",
+                "What the memory knows about Anna (person):\n- Leder Q3-lanseringen.",
+            ]
+        );
+        // A question about no one still gets what the memory knows about the user.
+        let found = gather(&store, "Sammanfatta", &now()).unwrap();
+        assert_eq!(found.known.len(), 1);
+        // It counts against the budget: entries make room for it.
+        let known: usize = found.known.iter().map(|k| k.chars().count()).sum();
+        let entries: usize = found
+            .episodes
+            .iter()
+            .map(|e| e.summary.chars().count() + 60)
+            .sum();
+        assert!(known + entries <= MAX_CHARS);
+        let _ = std::fs::remove_dir_all(folder);
     }
 
     #[test]
