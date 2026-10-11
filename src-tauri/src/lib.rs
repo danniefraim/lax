@@ -1,4 +1,5 @@
 mod accessibility;
+mod ask;
 #[cfg(target_os = "macos")]
 mod ax;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // The loop is macOS only.
@@ -33,6 +34,7 @@ use tauri::{Manager, WindowEvent};
 pub fn run() {
     tauri::Builder::default()
         .manage(pause::Pause::default())
+        .manage(models::ModelTurn::default())
         .manage(capture::Heartbeat::default())
         .manage(exclusions::Current::default())
         .invoke_handler(tauri::generate_handler![
@@ -65,6 +67,7 @@ pub fn run() {
             journal::journal_status,
             journal::set_journal_enabled,
             journal::journal_episodes,
+            ask::ask_memory,
             memory::memory_status,
             memory::set_memory_enabled,
             memory::memory_entities,
