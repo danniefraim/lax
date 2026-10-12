@@ -103,9 +103,14 @@ fn written(before: &str, after: Option<&str>) -> bool {
     after.is_some_and(|after| after != before)
 }
 
-/// The length of `text` in UTF-16 units, as Accessibility counts.
-fn utf16_len(text: &str) -> usize {
-    text.encode_utf16().count()
+/// Whether `len` UTF-16 units of `value` from `start` are still the paragraph
+/// the instruction was taken from.
+fn still_there(value: &str, start: usize, len: usize, instruction: &str) -> bool {
+    let units: Vec<u16> = value.encode_utf16().collect();
+    let Some(paragraph) = units.get(start..start.saturating_add(len)) else {
+        return false;
+    };
+    crate::summon::instruction_from(&String::from_utf16_lossy(paragraph)) == instruction
 }
 
 #[cfg(target_os = "macos")]
@@ -122,7 +127,7 @@ mod macos {
     use objc2_foundation::{NSArray, NSData, NSString};
     use tauri::{AppHandle, Manager};
 
-    use super::{BACK_IN_FRONT, Failed, How, utf16_len, written};
+    use super::{BACK_IN_FRONT, Failed, How, still_there, written};
     use crate::ax::AxScreen;
     use crate::capture::{App, Node};
     use crate::exclusions::{Current, Decision, is_secure_text_field};
@@ -195,14 +200,19 @@ mod macos {
                 return Err(Failed::Refused);
             }
         }
+        // Whether the instruction is selected now, ready to be replaced.
+        let mut selected = !matches!(call.replace, Replace::Paragraph { .. });
         if call.accessible
             && let Some(element) = &element
             && let Some(before) = element.value()
         {
-            let selected = match call.replace {
-                Replace::All => element.select(utf16_len(&before)),
-                Replace::Selection | Replace::Nothing => true,
-            };
+            // Only if the paragraph still holds the instruction: the field
+            // may have changed while the panel was open.
+            if let Replace::Paragraph { start, len, .. } = call.replace
+                && still_there(&before, start, len, &call.instruction)
+            {
+                selected = element.select(start, len);
+            }
             if selected
                 && element.replace_selection(text)
                 && written(&before, element.value().as_deref())
@@ -210,8 +220,11 @@ mod macos {
                 return Ok(How::Accessibility);
             }
         }
-        // ⌘A only selects what was the whole field: the instruction.
-        paste(text, call.replace == Replace::All);
+        // ⌘A only when the instruction was the whole field and couldn't be
+        // selected otherwise. If a paragraph couldn't be selected, the draft
+        // goes in at the cursor and the instruction stays for the user.
+        let whole = matches!(call.replace, Replace::Paragraph { whole: true, .. });
+        paste(text, whole && !selected);
         Ok(How::Pasted)
     }
 
@@ -327,11 +340,18 @@ mod tests {
     }
 
     #[test]
-    fn lengths_are_counted_as_accessibility_counts() {
-        assert_eq!(utf16_len("hej"), 3);
-        assert_eq!(utf16_len("åäö"), 3);
-        // An emoji is two UTF-16 units.
-        assert_eq!(utf16_len("hej 🐟"), 6);
+    fn a_paragraph_is_replaced_only_if_it_still_holds_the_instruction() {
+        let note = "Test från Anna\nsvara i min ton";
+        assert!(still_there(note, 15, 15, "svara i min ton"));
+        // Text arrived above it meanwhile.
+        assert!(!still_there(
+            &format!("Ny rad\n{note}"),
+            15,
+            15,
+            "svara i min ton"
+        ));
+        // Past the end.
+        assert!(!still_there(note, 15, 40, "svara i min ton"));
     }
 
     #[test]
