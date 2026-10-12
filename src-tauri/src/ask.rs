@@ -29,8 +29,10 @@ use crate::store::{EntityKind, Episode, ModelTask, Store};
 
 /// Most entries and characters of entries given to the model, so the prompt
 /// fits a small local model's context and is answered within the timeout.
-const MAX_ENTRIES: usize = 60;
-const MAX_CHARS: usize = 14_000;
+const MAX_ENTRIES: usize = 40;
+/// Smaller than the journal's blocks: the user waits while the model reads
+/// it, and finding by meaning picks fewer, better entries.
+const MAX_CHARS: usize = 8_000;
 /// Most entries taken from each way of finding them.
 const PER_SOURCE: usize = 40;
 /// Entries found by meaning.
@@ -56,8 +58,9 @@ memory knows about the user and about people, organisations and projects, and jo
 Each journal entry starts with its number in brackets, then when it happened and in which apps. \
 Answer briefly and directly, in the language of the question. For several things, use short \
 lines starting with \"- \". Put the numbers of the journal entries the answer is based on in \
-sources (what the memory knows has no number). If the blocks don't answer the question, say so \
-plainly; don't guess.";
+sources, as a list of numbers such as [1, 4] (what the memory knows has no number). Don't put \
+entry numbers in the answer. If the blocks don't answer the question, say so plainly; don't \
+guess.";
 const SHAPE: &str = r#"{"answer": string, "sources": [number]}"#;
 
 /// What the model must answer.
@@ -65,7 +68,58 @@ const SHAPE: &str = r#"{"answer": string, "sources": [number]}"#;
 #[serde(deny_unknown_fields)]
 struct Reply {
     answer: String,
+    #[serde(deserialize_with = "sources")]
     sources: Vec<u32>,
+}
+
+/// Entry numbers as the model writes them: a list of numbers as asked, but
+/// also, from small models answering without reasoning, numbers as text
+/// ("4"), ranges ("1-8") or a single text ("1, 3"). Anything else is
+/// refused. Whether the numbers were given is checked afterwards.
+fn sources<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<u32>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum One {
+        Number(u32),
+        Text(String),
+    }
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Many {
+        List(Vec<One>),
+        Text(String),
+    }
+    fn numbers(text: &str, out: &mut Vec<u32>) -> Option<()> {
+        for part in text.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            match part.split_once('-') {
+                Some((from, to)) => {
+                    let (from, to): (u32, u32) =
+                        (from.trim().parse().ok()?, to.trim().parse().ok()?);
+                    if to < from || to - from > MAX_ENTRIES as u32 {
+                        return None;
+                    }
+                    out.extend(from..=to);
+                }
+                None => out.push(part.parse().ok()?),
+            }
+        }
+        Some(())
+    }
+    let mut out = Vec::new();
+    let parsed = match Many::deserialize(deserializer)? {
+        Many::List(list) => list.into_iter().try_for_each(|one| match one {
+            One::Number(n) => {
+                out.push(n);
+                Some(())
+            }
+            One::Text(text) => numbers(&text, &mut out),
+        }),
+        Many::Text(text) => numbers(&text, &mut out),
+    };
+    match parsed {
+        Some(()) => Ok(out),
+        None => Err(serde::de::Error::custom("not entry numbers")),
+    }
 }
 
 impl Validate for Reply {
@@ -730,7 +784,7 @@ pub async fn ask_memory(app: AppHandle, question: String) -> Result<AskAnswer, S
                 ],
             );
             Ok(AskAnswer {
-                answer: reply.answer.trim().to_string(),
+                answer: without_references(&reply.answer),
                 sources: cited
                     .into_iter()
                     .map(|i| item(&found.episodes[i]))
@@ -785,6 +839,43 @@ fn with_store<T>(app: &AppHandle, work: impl FnOnce(&Store) -> T) -> Option<T> {
     let store = app.try_state::<Mutex<Store>>()?;
     let store = store.lock().unwrap_or_else(PoisonError::into_inner);
     Some(work(&store))
+}
+
+/// The answer without entry references such as "[3]" or "[1-8]", which
+/// models put in although sources are shown on their own.
+fn without_references(answer: &str) -> String {
+    let mut out = String::with_capacity(answer.len());
+    let mut rest = answer;
+    while let Some(open) = rest.find('[') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        match after.find(']') {
+            Some(close)
+                if close > 0
+                    && after[..close]
+                        .chars()
+                        .all(|c| c.is_ascii_digit() || matches!(c, ',' | '-' | '–' | ' '))
+                    && after[..close].chars().any(|c| c.is_ascii_digit()) =>
+            {
+                // Drop the space before it too.
+                while out.ends_with(' ') {
+                    out.pop();
+                }
+                rest = &after[close + 1..];
+            }
+            _ => {
+                out.push('[');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out.lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 fn item(e: &Episode) -> EpisodeItem {
@@ -1147,6 +1238,24 @@ mod tests {
     }
 
     #[test]
+    fn entry_references_are_taken_out_of_answers() {
+        assert_eq!(
+            without_references("Du mailade Anna [1] och planerade mötet [2-3].\n[1-8]"),
+            "Du mailade Anna och planerade mötet."
+        );
+        assert_eq!(without_references("Se [1, 4] nedan"), "Se nedan");
+        // Brackets that aren't references stay.
+        assert_eq!(
+            without_references("Lista [a] och [ ] och [x1]"),
+            "Lista [a] och [ ] och [x1]"
+        );
+        assert_eq!(
+            without_references("- rad ett\n- rad två"),
+            "- rad ett\n- rad två"
+        );
+    }
+
+    #[test]
     fn answers_are_validated() {
         let parse = |json: &str| structured::parse::<Reply>(json);
         assert!(parse(r#"{"answer":"Du mailade Anna.","sources":[1]}"#).is_ok());
@@ -1154,7 +1263,26 @@ mod tests {
         assert!(parse(r#"{"answer":"  ","sources":[]}"#).is_err());
         assert!(parse(r#"{"answer":"ok","sources":[1],"action":"send"}"#).is_err());
         assert!(parse("{\"answer\":\"ok\u{202E}hidden\",\"sources\":[]}").is_err());
-        assert!(parse(r#"{"answer":"ok","sources":["1"]}"#).is_err());
+        // Numbers as small models write them without reasoning.
+        let sources = |json: &str| parse(json).map(|r| r.sources).ok();
+        assert_eq!(sources(r#"{"answer":"ok","sources":["1"]}"#), Some(vec![1]));
+        assert_eq!(
+            sources(r#"{"answer":"ok","sources":"1-3"}"#),
+            Some(vec![1, 2, 3])
+        );
+        assert_eq!(
+            sources(r#"{"answer":"ok","sources":"1, 4"}"#),
+            Some(vec![1, 4])
+        );
+        assert_eq!(
+            sources(r#"{"answer":"ok","sources":[2, "5-6"]}"#),
+            Some(vec![2, 5, 6])
+        );
+        // Not numbers, or a range too long to be real, is refused.
+        assert!(parse(r#"{"answer":"ok","sources":"all of them"}"#).is_err());
+        assert!(parse(r#"{"answer":"ok","sources":"1-100000"}"#).is_err());
+        assert!(parse(r#"{"answer":"ok","sources":"5-2"}"#).is_err());
+        assert!(parse(r#"{"answer":"ok","sources":[true]}"#).is_err());
         assert!(
             parse(&format!(
                 r#"{{"answer":"{}","sources":[]}}"#,
