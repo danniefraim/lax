@@ -929,17 +929,7 @@ pub async fn ask_memory(
         return Err("The chat model's address isn't valid. Check it under Models.".to_string());
     };
     let started = std::time::Instant::now();
-    let texts: Vec<String> = conversation(&earlier)
-        .into_iter()
-        .chain(found.known.iter().cloned())
-        .chain(
-            found
-                .episodes
-                .iter()
-                .enumerate()
-                .map(|(i, e)| entry_text(i + 1, e, &Local)),
-        )
-        .collect();
+    let texts = blocks(&found, &earlier, &Local);
     let request = request(&question, &now);
     let asked = answer(endpoint, &choice.model, &request, &texts);
     let Some(reply) = app.state::<Pause>().unless_paused(asked).await else {
@@ -1016,16 +1006,33 @@ async fn answer(
         .map_err(StructuredError::Model)?
         .without_reasoning();
     let captured: Vec<Captured> = texts.iter().map(|t| Captured(t.as_str())).collect();
-    structured::ask_for(
-        &client,
-        model,
-        TASK,
-        SHAPE,
-        Some(request),
-        &captured,
-        MAX_TOKENS,
-    )
-    .await
+    structured::ask_for_last(&client, model, TASK, SHAPE, request, &captured, MAX_TOKENS).await
+}
+
+/// The captured blocks for the model, most stable first, so that a
+/// server's prompt cache can reuse the start of the prompt for the next
+/// question: what the memory knows about the user (the same for every
+/// question), what it knows about the entities named, the journal entries,
+/// and the conversation so far, which grows with every turn. The question
+/// and today's date and time go after all of them, as the request
+/// ([`structured::ask_for_last`]).
+fn blocks<Tz: TimeZone>(found: &Found, earlier: &[Earlier], tz: &Tz) -> Vec<String>
+where
+    Tz::Offset: std::fmt::Display,
+{
+    found
+        .known
+        .iter()
+        .cloned()
+        .chain(
+            found
+                .episodes
+                .iter()
+                .enumerate()
+                .map(|(i, e)| entry_text(i + 1, e, tz)),
+        )
+        .chain(conversation(earlier))
+        .collect()
 }
 
 fn with_store<T>(app: &AppHandle, work: impl FnOnce(&Store) -> T) -> Option<T> {
@@ -1707,6 +1714,82 @@ mod tests {
         let her = gather_after(&store, "Vad sa hon?", &["Vad gör Anna?"], None, &now()).unwrap();
         assert!(!her.recent_only);
         assert!(summaries(&her).contains(&"Ringde Anna om leveransen."));
+    }
+
+    #[test]
+    fn questions_and_follow_ups_share_the_start_of_the_prompt() {
+        let store = sample();
+        let known = vec![
+            "What the memory knows about the user:\n- Jobbar med lanseringar.".to_string(),
+            "What the memory knows about Anna (person):\n- Leder Q3-lanseringen.".to_string(),
+        ];
+        let prompt = |found: &Found, question: &str, earlier: &[Earlier], minutes: i64| {
+            let texts = blocks(found, earlier, &stockholm());
+            let captured: Vec<Captured> = texts.iter().map(|t| Captured(t.as_str())).collect();
+            let now = now() + TimeDelta::minutes(minutes);
+            structured::messages(
+                TASK,
+                SHAPE,
+                Some(structured::Request::Last(&request(question, &now))),
+                &captured,
+            )
+        };
+        let turn = |question: &str, answer: &str| Earlier {
+            question: question.to_string(),
+            answer: answer.to_string(),
+        };
+
+        // A question, then follow-ups with no words of their own, which
+        // gather what the question before them did.
+        let asked = "Vad gjorde jag med Anna?";
+        let mut found = gather(&store, asked, None, &now()).unwrap();
+        found.known = known.clone();
+        let [system, first] = prompt(&found, asked, &[], 0);
+        let mut follow_up = gather_after(&store, "Och vad mer?", &[asked], None, &now()).unwrap();
+        follow_up.known = known.clone();
+        let ids = |found: &Found| found.episodes.iter().map(|e| e.id).collect::<Vec<_>>();
+        assert_eq!(ids(&follow_up), ids(&found));
+        let earlier = [turn(asked, "Du mailade henne om offerten.")];
+        let [same_system, second] = prompt(&follow_up, "Och vad mer?", &earlier, 3);
+        let longer = [
+            turn(asked, "Du mailade henne om offerten."),
+            turn("Och vad mer?", "Du ringde henne."),
+        ];
+        let [_, third] = prompt(&follow_up, "Vad sa hon?", &longer, 5);
+        let [_, other] = prompt(&follow_up, "Och sen då?", &longer, 5);
+
+        // The system message is the same, byte for byte: no date or count.
+        assert_eq!(system.content, same_system.content);
+        // The first question's prompt up to its request is the start of the
+        // follow-ups' prompts: the memory, then the entries.
+        let stable = &first.content[..first.content.find("Request from the user:").unwrap()];
+        assert!(stable.starts_with("<captured>\nWhat the memory knows about the user:"));
+        assert!(stable.contains("Ringde Anna om leveransen."));
+        assert!(second.content.starts_with(stable));
+        assert!(third.content.starts_with(stable));
+        // The conversation grows at its end, so a later follow-up also
+        // starts with the one before it, up to that one's request.
+        let before = &second.content[..second.content.find("Request from the user:").unwrap()];
+        assert!(
+            third
+                .content
+                .starts_with(before.trim_end_matches("\n</captured>\n\n"))
+        );
+        // Two different questions after the same conversation differ only at
+        // the very end, in the question.
+        let shared = third
+            .content
+            .char_indices()
+            .zip(other.content.chars())
+            .find(|((_, a), b)| a != b)
+            .map(|((i, _), _)| i)
+            .unwrap();
+        assert!(third.content[..shared].ends_with("\n\nQuestion: "));
+        // The conversation comes after the entries, and the request last.
+        let conversation = second.content.find("The conversation so far").unwrap();
+        assert!(conversation > second.content.find("Ringde Anna").unwrap());
+        assert!(second.content.find("Request from the user:").unwrap() > conversation);
+        assert!(second.content.ends_with("Question: Och vad mer?"));
     }
 
     #[test]
