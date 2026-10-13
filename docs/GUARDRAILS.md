@@ -142,6 +142,29 @@ written to manipulate an AI ("ignore previous instructions and…"). Therefore:
   as text. Lax never presses Return or Send in another app.
 - **Structured output is validated.** Model output is parsed against a strict schema;
   anything that doesn't match is discarded.
+- **One exception: Ask may show its answer as it is written.** So the user doesn't
+  wait for the whole reply, the text of Ask's answer may be shown while the model
+  writes it, before the reply is validated, but only under all of these conditions:
+  - Only the text of the answer field is shown, and only while the reply still
+    has the requested shape: nothing but a code fence before the JSON object, and
+    nothing from any other field.
+  - It is shown as plain text only, never as HTML, Markdown or anything else that
+    can run code or load anything. Control and invisible characters (such as
+    text-direction overrides) are left out, and it stops at the answer's size
+    limit.
+  - Only the window that asked receives it.
+  - Nothing streamed is stored or sent anywhere, and it never goes into another
+    prompt. Only the validated answer stays in the conversation. Logs may say how
+    long it took and how much was shown, never what.
+  - When the reply is complete, it is validated in full like any other: its shape,
+    its limits, and its sources against the entries the model was given.
+  - If the reply fails validation, or is stopped by a pause or an error, the
+    streamed text is removed and replaced by the usual error, and nothing of it
+    is kept.
+  - A pause stops the stream within a second, as it stops any model call.
+
+  This applies to Ask only. The journal, entity names, memory facts and the writing
+  assistant's drafts are validated before they are shown or used.
 - **Untrusted content is delimited** in prompts and the model is told it is data,
   not instructions.
 - **User edits win.** Text the user wrote or corrected in a memory page cannot be
