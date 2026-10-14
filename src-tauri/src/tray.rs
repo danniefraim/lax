@@ -54,6 +54,12 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         PAUSE_1_HOUR => pause.pause(PauseLength::OneHour),
         PAUSE_UNTIL_TOMORROW => pause.pause(PauseLength::UntilTomorrow),
         PAUSE_UNTIL_RESUMED => pause.pause(PauseLength::UntilResumed),
+        // Nothing can be captured before the database is open: the window
+        // says why, instead of the menu bar showing capture as on.
+        RESUME if app.try_state::<Mutex<Store>>().is_none() => {
+            open_window(app);
+            return;
+        }
         RESUME => pause.resume(),
         OPEN => {
             open_window(app);
@@ -81,7 +87,7 @@ fn save_pause(app: &AppHandle) -> bool {
 }
 
 /// Updates the icon, tooltip and menu to match the pause state.
-fn refresh(app: &AppHandle) {
+pub fn refresh(app: &AppHandle) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
