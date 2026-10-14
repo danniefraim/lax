@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, onTestFinished, test, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { Ask } from "./Ask";
@@ -66,8 +66,14 @@ describe("Ask", () => {
 
   test("the answer is followed as it streams, unless the user scrolled up", async () => {
     const question = pending();
-    const scrolled = vi.spyOn(Element.prototype, "scrollIntoView");
+    const scrolled = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
     const page = document.documentElement;
+    onTestFinished(() => {
+      scrolled.mockRestore();
+      for (const key of ["scrollHeight", "clientHeight", "scrollTop"]) {
+        delete (page as unknown as Record<string, unknown>)[key];
+      }
+    });
     const setPage = (top: number) => {
       Object.defineProperty(page, "scrollHeight", { configurable: true, value: 2000 });
       Object.defineProperty(page, "clientHeight", { configurable: true, value: 500 });
@@ -77,20 +83,45 @@ describe("Ask", () => {
     render(<Ask onShowJournal={() => {}} />);
     await act(async () => ask("What did I do yesterday?"));
 
-    // At the end of the page: each piece keeps the answer in view.
+    // At the end of the page: each piece keeps the window at its end, below
+    // the question box, not just at the answer's last line.
     setPage(1500);
     scrolled.mockClear();
     await act(async () => channel().onmessage("You wrote "));
-    expect(scrolled).toHaveBeenCalled();
+    expect(scrolled).toHaveBeenCalledWith({ top: 2000, behavior: "auto" });
 
-    // Scrolled up to read: the page is left where it is.
+    // Scrolled up to read: the window is left where it is.
     setPage(200);
     scrolled.mockClear();
-    await act(async () => channel().onmessage("the quote."));
+    await act(async () => channel().onmessage("the quote"));
     expect(scrolled).not.toHaveBeenCalled();
 
+    // A turn of the wheel upward stops following at once, before the
+    // window reports the scroll, even this close to the end.
+    setPage(1490);
+    window.dispatchEvent(new WheelEvent("wheel", { deltaY: -10 }));
+    scrolled.mockClear();
+    await act(async () => channel().onmessage(" Then"));
+    expect(scrolled).not.toHaveBeenCalled();
+    setPage(200);
+
+    // The page getting shorter at the end moves the window up, but it is
+    // still at the end: followed.
+    setPage(1490);
+    Object.defineProperty(page, "scrollHeight", { configurable: true, value: 1980 });
+    Object.defineProperty(page, "scrollTop", { configurable: true, value: 1480 });
+    window.dispatchEvent(new Event("scroll"));
+    scrolled.mockClear();
+    await act(async () => channel().onmessage(" too"));
+    expect(scrolled).toHaveBeenCalled();
+    setPage(200);
+
+    // Back down at the end: followed again.
+    setPage(1490);
+    await act(async () => channel().onmessage("."));
+    expect(scrolled).toHaveBeenCalled();
+
     await act(async () => question.answer(answer("You wrote the quote.")));
-    scrolled.mockRestore();
   });
 
   test("the salmon thinks while the answer comes, and a failed question comes back", async () => {
