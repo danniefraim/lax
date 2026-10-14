@@ -264,6 +264,14 @@ ADR 0011.
   `logging.rs`, is compiled out: `LIBSQLITE3_FLAGS = "-DSQLCIPHER_OMIT_LOG"`
   in `src-tauri/.cargo/config.toml` under `[env]`. A pragma can't do it
   reliably, because the log target is set process-wide at the first open.
+  Step 2 found a second path: `PRAGMA cipher_profile = device` sends every
+  statement's SQL to the unified log, and `SQLCIPHER_OMIT_LOG` doesn't
+  remove it. So the setting is `LIBSQLITE3_FLAGS = { value =
+  "-DSQLCIPHER_OMIT_LOG -DSQLCIPHER_OMIT_LOG_DEVICE", force = true }`,
+  which leaves SQLCipher no `os_log` call at all, and `force` keeps a
+  `LIBSQLITE3_FLAGS` in the environment from replacing it. Cargo reads the
+  file only when it runs in `src-tauri`, so `build.rs` refuses to build
+  without both flags.
 
 ### The key
 
