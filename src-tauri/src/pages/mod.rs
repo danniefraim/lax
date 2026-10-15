@@ -39,8 +39,45 @@ pub fn folder(home: &Path) -> PathBuf {
 
 /// Latest entries listed on a page.
 const LATEST: usize = 10;
-/// Pages bigger than this aren't read: not a page Lax wrote.
-const MAX_PAGE_BYTES: u64 = 1 << 20;
+/// Pages bigger than this aren't read, and the editor saves nothing
+/// bigger.
+pub const MAX_PAGE_BYTES: u64 = 1 << 20;
+
+/// The pages open in the Memory view's editors, by id, with how many
+/// editors have each open. Lax doesn't write a page while it is open, so a
+/// save rarely finds it changed (ADR 0011).
+#[derive(Default)]
+pub struct OpenPages(Mutex<HashMap<String, usize>>);
+
+impl OpenPages {
+    pub fn open(&self, id: &str) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(id.to_string())
+            .or_default() += 1;
+    }
+
+    pub fn close(&self, id: &str) {
+        let mut open = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(count) = open.get_mut(id) {
+            *count -= 1;
+            if *count == 0 {
+                open.remove(id);
+            }
+        }
+    }
+
+    fn ids(&self) -> HashSet<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys()
+            .cloned()
+            .collect()
+    }
+}
 /// How deep below the folder pages are looked for.
 const MAX_DEPTH: usize = 4;
 
@@ -484,19 +521,21 @@ where
         dir,
         on_disk: scan(dir, cache),
     };
-    sync_shelf(store, &shelf, now, tz)
+    sync_shelf(store, &shelf, &HashSet::new(), now, tz)
 }
 
-/// Brings the pages in the database up to date. See [`sync_shelf`].
+/// Brings the pages in the database up to date, except the pages `open`
+/// in an editor. See [`sync_shelf`].
 pub fn sync_rows<Tz: TimeZone>(
     store: &mut Store,
+    open: &HashSet<String>,
     now: DateTime<Utc>,
     tz: &Tz,
 ) -> crate::store::Result<Synced>
 where
     Tz::Offset: std::fmt::Display,
 {
-    sync_shelf(store, &Shelf::Rows, now, tz)
+    sync_shelf(store, &Shelf::Rows, open, now, tz)
 }
 
 /// Brings the pages up to date with the memory: new pages for entities Lax
@@ -505,6 +544,7 @@ where
 fn sync_shelf<Tz: TimeZone>(
     store: &mut Store,
     shelf: &Shelf,
+    open: &HashSet<String>,
     now: DateTime<Utc>,
     tz: &Tz,
 ) -> crate::store::Result<Synced>
@@ -517,7 +557,9 @@ where
     let enabled = store.memory_enabled()?;
 
     for page in store.pages()? {
-        if page.kind == PageKind::AboutMe {
+        // About me is done below; the page open in the editor waits until
+        // it is closed. A forgotten entity's page waits too.
+        if page.kind == PageKind::AboutMe || open.contains(&page.id) {
             continue;
         }
         let found = shelf.find(store, &page)?;
@@ -579,7 +621,7 @@ where
         }
     }
 
-    about_me(store, shelf, now, &mut done)?;
+    about_me(store, shelf, open, now, &mut done)?;
 
     if done != Synced::default() {
         logging::info(
@@ -801,6 +843,7 @@ fn lately(store: &Store, now: DateTime<Utc>) -> crate::store::Result<AboutMe> {
 fn about_me(
     store: &mut Store,
     shelf: &Shelf,
+    open: &HashSet<String>,
     now: DateTime<Utc>,
     done: &mut Synced,
 ) -> crate::store::Result<()> {
@@ -823,6 +866,7 @@ fn about_me(
                 done.created += 1;
             }
         }
+        Some(page) if open.contains(&page.id) => {}
         Some(page) => {
             let found = shelf.find(store, &page)?;
             refresh(
@@ -868,7 +912,11 @@ pub fn sync_now(app: &AppHandle) {
     let mut store = store.lock().unwrap_or_else(PoisonError::into_inner);
     // Moved into the database: no folder to prepare.
     if store.pages_in_database().unwrap_or(false) {
-        if sync_rows(&mut store, Utc::now(), &Local).is_err() {
+        let open = app
+            .try_state::<OpenPages>()
+            .map(|open| open.ids())
+            .unwrap_or_default();
+        if sync_rows(&mut store, &open, Utc::now(), &Local).is_err() {
             logging::warn("pages.failed", &[Field::Error(ErrorKind::Database)]);
         }
         return;
