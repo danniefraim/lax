@@ -4,6 +4,10 @@ What changed in each version of Lax, for people who use it.
 
 ## Unreleased
 
+- **Fixed: models that think too long wrote nothing.** Some models, such as
+  Qwen 3.5, think before every answer until they run out of room, so the
+  journal and the memory got no answer at all. When that happens, Lax now
+  asks once more without thinking, and gets one.
 - **Brief me.** Before a call or a reply, press **Brief me** on a name in
   Memory: Ask tells you who they are to you, what you discussed lately and
   what is still open, with its sources.
